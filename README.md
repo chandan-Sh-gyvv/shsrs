@@ -58,7 +58,7 @@ At 1M vectors (SIFT1M):
 - Build time: ~55 min CPU / ~2 min GPU
 
 Search latency scales with **probe count**, not dataset size.
-
+---
 ## Paper
 
 📄 **[SHSRS_paper.pdf](SHSRS_paper.pdf)**
@@ -214,15 +214,6 @@ small gap = boundary query = more probes needed.
 
 ---
 
-## Paper
-
-> **SHSRS: Semantic Hierarchical Search with Refined Subspace**  
-> Chandan S H — Preprint, February 2026
-
-See `SHSRS_paper.pdf` for full experimental results and analysis.
-
----
-
 ## Requirements
 
 - Python 3.10+
@@ -232,7 +223,6 @@ See `SHSRS_paper.pdf` for full experimental results and analysis.
 
 GPU support: swap `faiss-cpu` for `faiss-gpu` — no code changes required.
 
----
 ---
 ## When to Use SHSRS
 
