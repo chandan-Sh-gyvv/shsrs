@@ -13,6 +13,12 @@ Core contribution: **IGAR** (Iterative Graph-Aligned Reassignment) — a cluster
 vs flat KMeans baseline: **+15.7pp recall, 3.5x faster, 9x fewer candidates** simultaneously.  
 vs brute force: **261x speedup** at 95.4% recall (150K).
 
+## Paper
+
+📄 **[SHSRS_paper.pdf](SHSRS_paper.pdf)**
+
+> SHSRS: Semantic Hierarchical Search with Refined Subspace  
+> Chandan S H, Karnataka Bengaluru — Preprint, 22 February 2026
 ---
 
 ## Installation
