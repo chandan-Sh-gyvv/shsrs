@@ -1,0 +1,38 @@
+# Data files — too large for git
+*.npy
+*.fvecs
+*.ivecs
+*.tar.gz
+
+# Index directories — built locally, not committed
+shsrs_hnsw_cache/
+shsrs_production_index/
+shsrs_sift1m_index/
+sift1m_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
