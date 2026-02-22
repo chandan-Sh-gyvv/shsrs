@@ -1,4 +1,4 @@
-# SHSRS — Semantic Hierarchical Search with Refined Subspace
+# SHSRS — Semantic Hierarchical Search with Refined Subspace [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18733029.svg)](https://doi.org/10.5281/zenodo.18733029)
 
 **Topology-aware hybrid ANN search for scalable, low-latency vector retrieval.**
 
@@ -237,3 +237,11 @@ GPU support: swap `faiss-cpu` for `faiss-gpu` — no code changes required.
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
+
+---
+## Citation
+
+If you use SHSRS in your research, please cite:
+
+Chandan S H. (2026). SHSRS: Semantic Hierarchical Search with Refined Subspace. 
+Zenodo. https://doi.org/10.5281/zenodo.18733029
