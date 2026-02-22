@@ -1,7 +1,42 @@
 # SHSRS — Semantic Hierarchical Search with Refined Subspace
 
-A CPU-friendly approximate nearest neighbour (ANN) search engine for dense vector embeddings.  
-Core contribution: **IGAR** (Iterative Graph-Aligned Reassignment) — a cluster refinement algorithm that improves partition quality by maximising kNN neighbour retention rather than centroid proximity.
+**Topology-aware hybrid ANN search for scalable, low-latency vector retrieval.**
+
+SHSRS combines macro-cluster routing, graph-aligned cluster refinement (IGAR),
+and per-cluster HNSW search to decouple query cost from dataset size.
+
+Instead of searching the full corpus or traversing a global graph,
+SHSRS routes queries into small local graphs — achieving high recall
+with microscopic candidate coverage (~0.001% at 1M scale).
+
+## Why SHSRS?
+
+Traditional ANN systems face one of two trade-offs:
+
+| Approach | Strength | Weakness |
+|----------|----------|----------|
+| Brute Force | Exact recall | O(N) scaling |
+| IVF (flat clustering) | Fast | Boundary recall loss |
+| Global HNSW | High recall | High RAM, global traversal cost |
+
+SHSRS solves this by:
+
+- Refining cluster boundaries using **kNN graph alignment (IGAR)**
+- Localising HNSW search to small per-cluster graphs
+- Using **adaptive probe routing** to control compute per query
+
+Search cost becomes **probe-bounded**, not dataset-bounded.
+
+## Architecture Overview
+
+Query → Centroid Routing → Probe Selection → Local HNSW Search → Merge Results
+
+Build-time pipeline:
+
+1. KMeans partition
+2. IGAR refinement (maximise neighbour retention)
+3. Per-cluster HNSW index construction
+4. Gap calibration for adaptive routing
 
 ## Results
 
@@ -10,8 +45,19 @@ Core contribution: **IGAR** (Iterative Graph-Aligned Reassignment) — a cluster
 | Wikipedia (384D) | 150K | 95.4% | 1.91ms | 525 | 238 MB |
 | SIFT1M (128D) | 1M | 93.4% | 1.88ms | 533 | 610 MB |
 
-vs flat KMeans baseline: **+15.7pp recall, 3.5x faster, 9x fewer candidates** simultaneously.  
+vs flat IVF baseline:**+15.7pp recall, 3.5x lower latency, 9× fewer candidates** simultaneously.  
 vs brute force: **261x speedup** at 95.4% recall (150K).
+
+## Scaling Behaviour
+
+At 1M vectors (SIFT1M):
+
+- Candidate coverage: ~0.001%
+- 97.8% Recall@10 @ 3.79ms (CPU)
+- Index RAM: 610 MB
+- Build time: ~55 min CPU / ~2 min GPU
+
+Search latency scales with **probe count**, not dataset size.
 
 ## Paper
 
@@ -185,6 +231,16 @@ See `SHSRS_paper.pdf` for full experimental results and analysis.
 - scikit-learn >= 1.3.0
 
 GPU support: swap `faiss-cpu` for `faiss-gpu` — no code changes required.
+
+---
+---
+## When to Use SHSRS
+
+- CPU-first deployments
+- Large embedding corpora (100K – 10M scale)
+- Retrieval-augmented generation (RAG)
+- Semantic content search
+- Cost-sensitive vector search infrastructure
 
 ---
 
