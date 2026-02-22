@@ -56,7 +56,7 @@ At 1M vectors (SIFT1M):
 - 97.8% Recall@10 @ 3.79ms (CPU)
 - Index RAM: 610 MB
 - Build time: ~55 min CPU / ~2 min GPU
-Search latency scales with **probe count**, not dataset size.
+- Search latency scales with **probe count**, not dataset size.
 ---
 ## Paper
 📄 **[SHSRS_paper.pdf](SHSRS_paper.pdf)**
