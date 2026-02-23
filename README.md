@@ -40,13 +40,24 @@ Build-time pipeline:
 
 ## Results
 
+### With Cross-Boundary Links (latest)
+
+| Dataset | Vectors | Recall@10 | Latency | QPS | Index RAM |
+|---|---|---|---|---|---|
+| Wikipedia (384D) | 150K | 98.7% | 2.44ms | 411 | 238 MB |
+| Wikipedia (384D) | 150K | 95.7% | 1.20ms | 831 | 238 MB |
+| SIFT1M (128D) | 1M | 93.4% | 1.88ms | 533 | 610 MB |
+
+### Baseline Architecture (no boundary links)
+
 | Dataset | Vectors | Recall@10 | Latency | QPS | Index RAM |
 |---|---|---|---|---|---|
 | Wikipedia (384D) | 150K | 95.4% | 1.91ms | 525 | 238 MB |
 | SIFT1M (128D) | 1M | 93.4% | 1.88ms | 533 | 610 MB |
 
-vs flat IVF baseline:**+15.7pp recall, 3.5x lower latency, 9× fewer candidates** simultaneously.  
-vs brute force: **261x speedup** at 95.4% recall (150K).
+**vs flat IVF baseline:** +19.0pp recall, 2.7x lower latency, 9x fewer candidates simultaneously.  
+**vs brute force:** 261x speedup at 98.7% recall (150K).  
+**Cross-boundary links gain:** probe=6 achieves 95.7% recall (+7.6pp) at same latency as before.
 
 ## Scaling Behaviour
 
