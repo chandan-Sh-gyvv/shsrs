@@ -81,18 +81,19 @@ class SHSRSEngine:
     """
 
     def __init__(self):
-        self._data_norm:   Optional[np.ndarray]       = None
-        self._centers:     Optional[np.ndarray]       = None
-        self._indexes:     dict[int, faiss.Index]     = {}
-        self._id_maps:     dict[int, np.ndarray]      = {}
-        self._gap_policy:  list[tuple[float, int]]    = _DEFAULT_GAP_POLICY
-        self._ef_search:   int                        = _DEFAULT_EF_SEARCH
-        self._n_clusters:  int                        = _DEFAULT_N_CLUSTERS
-        self._dim:         int                        = 0
-        self._n_vectors:   int                        = 0
-        self._pq_m:        int                        = 0
-        self._n_threads:   int                        = os.cpu_count() or 4
-        self._executor:    Optional[ThreadPoolExecutor] = None
+        self._data_norm:       Optional[np.ndarray]       = None
+        self._centers:         Optional[np.ndarray]       = None
+        self._indexes:         dict[int, faiss.Index]     = {}
+        self._id_maps:         dict[int, np.ndarray]      = {}
+        self._boundary_links:  dict[int, np.ndarray]      = {}
+        self._gap_policy:      list[tuple[float, int]]    = _DEFAULT_GAP_POLICY
+        self._ef_search:       int                        = _DEFAULT_EF_SEARCH
+        self._n_clusters:      int                        = _DEFAULT_N_CLUSTERS
+        self._dim:             int                        = 0
+        self._n_vectors:       int                        = 0
+        self._pq_m:            int                        = 0
+        self._n_threads:       int                        = os.cpu_count() or 4
+        self._executor:        Optional[ThreadPoolExecutor] = None
 
     # ══════════════════════════════════════════════════════════════════════════
     # BUILD
@@ -204,7 +205,20 @@ class SHSRSEngine:
 
         logger.info(f"HNSW indexes built in {time.time()-t0:.1f}s")
 
-        # 6. Save
+        # 6. Cross-boundary links
+        # Identify vectors whose nearest neighbour is in a different cluster
+        # and store direct links to their cross-cluster neighbours.
+        # At search time these links expand candidates without extra probes.
+        logger.info("Building cross-boundary links...")
+        t0 = time.time()
+        engine._boundary_links = _build_boundary_links(
+            labels, knn_graph, M)
+        n_boundary = len(engine._boundary_links)
+        pct        = n_boundary / N * 100
+        logger.info(f"Cross-boundary links: {n_boundary:,} boundary vectors "
+                    f"({pct:.1f}% of corpus) in {time.time()-t0:.1f}s")
+
+        # 7. Save
         engine._save(index_dir, labels, M, ef_construction)
         logger.info(f"Index saved to {index_dir}")
 
@@ -224,16 +238,27 @@ class SHSRSEngine:
             faiss.write_index(idx, str(index_dir / f"hnsw_c{c}.faiss"))
             np.save(index_dir / f"map_c{c}.npy", self._id_maps[c])
 
+        # save boundary links as two arrays: keys and a ragged value store
+        if self._boundary_links:
+            bl_keys = np.array(list(self._boundary_links.keys()), dtype=np.int64)
+            bl_vals = np.array(list(self._boundary_links.values()),
+                               dtype=object)
+            np.save(index_dir / "boundary_keys.npy", bl_keys)
+            np.save(index_dir / "boundary_vals.npy", bl_vals,
+                    allow_pickle=True)
+
         meta = {
-            "n_clusters":      self._n_clusters,
-            "dim":             self._dim,
-            "n_vectors":       self._n_vectors,
-            "M":               M,
-            "ef_construction": ef_construction,
-            "ef_search":       self._ef_search,
-            "gap_policy":      self._gap_policy,
-            "n_indexes":       len(self._indexes),
-            "pq_m":            self._pq_m,
+            "n_clusters":        self._n_clusters,
+            "dim":               self._dim,
+            "n_vectors":         self._n_vectors,
+            "M":                 M,
+            "ef_construction":   ef_construction,
+            "ef_search":         self._ef_search,
+            "gap_policy":        self._gap_policy,
+            "n_indexes":         len(self._indexes),
+            "pq_m":              self._pq_m,
+            "has_boundary_links": len(self._boundary_links) > 0,
+            "n_boundary_vectors": len(self._boundary_links),
         }
         with open(index_dir / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -269,6 +294,17 @@ class SHSRSEngine:
             if idx_path.exists():
                 engine._indexes[c] = faiss.read_index(str(idx_path))
                 engine._id_maps[c] = np.load(map_path)
+
+        # load boundary links if present
+        bl_keys_path = index_dir / "boundary_keys.npy"
+        bl_vals_path = index_dir / "boundary_vals.npy"
+        if bl_keys_path.exists():
+            bl_keys = np.load(bl_keys_path)
+            bl_vals = np.load(bl_vals_path, allow_pickle=True)
+            engine._boundary_links = {
+                int(k): v for k, v in zip(bl_keys, bl_vals)
+            }
+            logger.info(f"Loaded {len(engine._boundary_links):,} boundary links")
 
         logger.info("Index loaded.")
         return engine
@@ -391,8 +427,30 @@ class SHSRSEngine:
         if len(cands) == 0:
             return []
 
-        # rerank by exact cosine
+        # compute scores once — reuse for both expansion gate and reranking
         cand_scores = self._data_norm[cands] @ q
+
+        # expand with cross-boundary links (score-gated, no double computation)
+        if self._boundary_links and len(cands) > 0:
+            threshold = float(np.median(cand_scores))
+            extra_ids = []
+            for gid, sc in zip(cands, cand_scores):
+                if sc >= threshold:
+                    links = self._boundary_links.get(int(gid))
+                    if links is not None:
+                        extra_ids.append(links)
+            if extra_ids:
+                new_cands  = np.unique(np.concatenate(extra_ids))
+                # only score the genuinely new candidates
+                existing   = set(cands.tolist())
+                new_only   = new_cands[~np.isin(new_cands,
+                                                 np.array(list(existing)))]
+                if len(new_only) > 0:
+                    new_scores = self._data_norm[new_only] @ q
+                    cands      = np.concatenate([cands, new_only])
+                    cand_scores = np.concatenate([cand_scores, new_scores])
+
+        # rerank by exact cosine (scores already computed above)
         if len(cands) > k:
             top_idx = np.argpartition(-cand_scores, k)[:k]
         else:
@@ -497,7 +555,8 @@ class SHSRSEngine:
     def __repr__(self) -> str:
         return (f"SHSRSEngine(n_vectors={self._n_vectors:,}, "
                 f"dim={self._dim}, n_clusters={self._n_clusters}, "
-                f"n_indexes={len(self._indexes)})")
+                f"n_indexes={len(self._indexes)}, "
+                f"boundary_vectors={len(self._boundary_links):,})")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -517,6 +576,48 @@ def _build_knn_graph_faiss(data: np.ndarray, k: int) -> np.ndarray:
     index.add(data)
     _, indices = index.search(data, k + 1)
     return indices[:, 1:].astype(np.int32)
+
+
+def _build_boundary_links(
+    labels: np.ndarray,
+    knn_graph: np.ndarray,
+    M: int,
+) -> dict[int, np.ndarray]:
+    """
+    Identify boundary vectors and store cross-cluster links.
+
+    A vector is a boundary vector only if its NEAREST neighbour
+    (knn_graph[:,0]) lives in a different cluster. This is a tight
+    definition that keeps boundary set small and high-quality.
+
+    At search time these links expand the candidate pool for
+    boundary queries without requiring extra cluster probes.
+
+    Parameters
+    ----------
+    labels    : cluster label per vector [N]
+    knn_graph : kNN neighbour indices [N, k], sorted by distance
+    M         : max cross-boundary links per boundary vector
+
+    Returns
+    -------
+    dict mapping global_id → np.ndarray of foreign neighbour global_ids
+    """
+    # Only vectors whose NEAREST neighbour is in a different cluster
+    nearest_neighbour_labels = labels[knn_graph[:, 0]]
+    is_boundary = nearest_neighbour_labels != labels
+
+    boundary_ids = np.where(is_boundary)[0]
+    links        = {}
+
+    for gid in boundary_ids:
+        nbrs    = knn_graph[gid]
+        own_c   = labels[gid]
+        foreign = nbrs[labels[nbrs] != own_c][:M]
+        if len(foreign) > 0:
+            links[int(gid)] = foreign.astype(np.int64)
+
+    return links
 
 
 def _run_igar(labels: np.ndarray, knn_graph: np.ndarray,
