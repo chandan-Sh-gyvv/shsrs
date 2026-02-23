@@ -44,9 +44,7 @@ Build-time pipeline:
 
 | Dataset | Vectors | Recall@10 | Latency | QPS | Index RAM |
 |---|---|---|---|---|---|
-| Wikipedia (384D) | 150K | 98.7% | 2.44ms | 411 | 238 MB |
 | Wikipedia (384D) | 150K | 95.7% | 1.20ms | 831 | 238 MB |
-| SIFT1M (128D) | 1M | 93.4% | 1.88ms | 533 | 610 MB |
 
 ### Baseline Architecture (no boundary links)
 
