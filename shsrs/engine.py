@@ -404,20 +404,35 @@ class SHSRSEngine:
     ) -> list[tuple[float, int]]:
         """
         Recalibrate gap thresholds from a sample of real queries.
+        Automatically selects probe counts appropriate for n_clusters.
         Call this when switching to a new dataset or embedding model.
 
         Parameters
         ----------
         sample_queries : representative query vectors [Q, D].
         probe_tiers    : list of (percentile, probe_count) pairs.
-                         Default: [(90,6),(75,8),(50,12),(25,16),(0,20)]
+                         If None, auto-selected based on n_clusters.
 
         Returns
         -------
         New gap_policy list (also updates self._gap_policy in place).
         """
         if probe_tiers is None:
-            probe_tiers = [(90, 6), (75, 8), (50, 12), (25, 16), (0, 20)]
+            # Auto-scale probe counts based on n_clusters
+            # Rule: probe counts should range from ~2% to ~5% of n_clusters
+            # to keep candidate coverage reasonable
+            K = self._n_clusters
+            if K <= 100:
+                # 150K scale: probe 6-20 out of 100 clusters (6%-20%)
+                probe_tiers = [(90, 6), (75, 8), (50, 12), (25, 16), (0, 20)]
+            elif K <= 500:
+                # mid scale
+                probe_tiers = [(90, 8), (75, 12), (50, 20), (25, 32), (0, 48)]
+            else:
+                # 1M scale: probe 8-32 out of 1000 clusters (0.8%-3.2%)
+                probe_tiers = [(90, 8), (75, 12), (50, 16), (25, 24), (0, 32)]
+
+            logger.info(f"Auto-selected probe tiers for K={K}: {probe_tiers}")
 
         qs = _cosine_normalize(sample_queries.astype(np.float32))
         gaps = []
@@ -426,6 +441,11 @@ class SHSRSEngine:
             top2   = np.partition(-scores, 1)[:2]
             gaps.append(float(-top2[0] + top2[1]))
         gaps = np.array(gaps)
+
+        logger.info(f"Gap distribution: p10={np.percentile(gaps,10):.4f} "
+                    f"p50={np.percentile(gaps,50):.4f} "
+                    f"p90={np.percentile(gaps,90):.4f} "
+                    f"mean={gaps.mean():.4f}")
 
         policy = []
         for pct, probe in sorted(probe_tiers, reverse=True):
