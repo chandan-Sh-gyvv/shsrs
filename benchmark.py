@@ -240,6 +240,27 @@ def main():
                 print(f"    {label:<25} {res['qps']:>8.0f}  "
                       f"{1000/res['qps']:>9.2f}ms")
 
+    # ── multithreaded benchmark ──────────────────────────────────────────────
+    print(f"\n[5b] Multithreaded search benchmark")
+    print(f"    {'Threads':<12} {'Recall':>8} {'Mean':>8} {'p95':>8} {'QPS':>7}")
+    print(f"    {'-'*50}")
+
+    import os
+    max_threads = os.cpu_count() or 4
+    for n_threads in [1, 2, 4, min(8, max_threads)]:
+        engine.set_threads(n_threads)
+        r = run_benchmark(engine, data_norm, queries_norm, ground_truth,
+                          k=args.k, probe=12,
+                          label=f"{n_threads} thread(s)")
+        speedup = all_results[3]['lat_mean'] / r['lat_mean']  # vs single thread probe=12
+        print(f"    {n_threads} thread(s)       "
+              f"Recall={r['recall']*100:>5.1f}%  "
+              f"Mean={r['lat_mean']:>6.2f}ms  "
+              f"p95={r['lat_p95']:>6.2f}ms  "
+              f"QPS={r['qps']:>6.0f}  "
+              f"({speedup:.1f}x vs 1T)")
+    engine.set_threads(1)  # reset
+
     # ── summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*80}")
     print("SUMMARY")

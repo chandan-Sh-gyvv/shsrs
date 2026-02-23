@@ -34,9 +34,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import time
 import logging
 from pathlib import Path
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import numpy as np
@@ -87,6 +90,8 @@ class SHSRSEngine:
         self._n_clusters:  int                        = _DEFAULT_N_CLUSTERS
         self._dim:         int                        = 0
         self._n_vectors:   int                        = 0
+        self._n_threads:   int                        = os.cpu_count() or 4
+        self._executor:    Optional[ThreadPoolExecutor] = None
 
     # ══════════════════════════════════════════════════════════════════════════
     # BUILD
@@ -261,6 +266,7 @@ class SHSRSEngine:
         query: np.ndarray,
         k: int = 10,
         probe: Optional[int] = None,
+        n_threads: Optional[int] = None,
     ) -> list[tuple[int, float]]:
         """
         Search for the k nearest neighbours of a single query vector.
@@ -275,6 +281,8 @@ class SHSRSEngine:
         -------
         List of (global_id, cosine_score) sorted by score descending.
         """
+        if n_threads is not None:
+            self._n_threads = n_threads
         q = _cosine_normalize(query.reshape(1, -1).astype(np.float32))[0]
         return self._search_normalised(q, k=k, probe=probe)
 
@@ -283,6 +291,7 @@ class SHSRSEngine:
         queries: np.ndarray,
         k: int = 10,
         probe: Optional[int] = None,
+        n_threads: Optional[int] = None,
     ) -> list[list[tuple[int, float]]]:
         """
         Search for k nearest neighbours for a batch of query vectors.
@@ -297,8 +306,37 @@ class SHSRSEngine:
         -------
         List of Q result lists, each a list of (global_id, cosine_score).
         """
+        if n_threads is not None:
+            self._n_threads = n_threads
         qs = _cosine_normalize(queries.astype(np.float32))
         return [self._search_normalised(q, k=k, probe=probe) for q in qs]
+
+    def set_threads(self, n: int) -> None:
+        """Set number of threads for parallel cluster search."""
+        self._n_threads = max(1, n)
+        # Recreate persistent executor with new thread count
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+        self._executor = ThreadPoolExecutor(max_workers=self._n_threads) \
+            if self._n_threads > 1 else None
+        logger.info(f'Thread count set to {self._n_threads}')
+
+    def _search_one_cluster(
+        self,
+        c: int,
+        q: np.ndarray,
+        k: int,
+    ) -> Optional[np.ndarray]:
+        """Search a single cluster index. Thread-safe — FAISS HNSW read is safe."""
+        idx  = self._indexes.get(c)
+        gids = self._id_maps.get(c)
+        if idx is None:
+            return None
+        idx.hnsw.efSearch = max(self._ef_search, k)
+        actual_k = min(k, idx.ntotal)
+        _, lids = idx.search(q.reshape(1, -1), actual_k)
+        valid = lids[0][lids[0] >= 0]
+        return gids[valid] if len(valid) else None
 
     def _search_normalised(
         self,
@@ -309,18 +347,26 @@ class SHSRSEngine:
         scores       = self._centers @ q
         n_probe      = probe if probe is not None else self._probe_from_gap(scores)
         top_clusters = np.argpartition(-scores, min(n_probe, len(scores)-1))[:n_probe]
+        top_clusters = [int(c) for c in top_clusters]
 
         candidate_ids = []
-        for c in top_clusters:
-            idx  = self._indexes.get(int(c))
-            gids = self._id_maps.get(int(c))
-            if idx is None:
-                continue
-            idx.hnsw.efSearch = max(self._ef_search, k)
-            actual_k = min(k, idx.ntotal)
-            _, lids = idx.search(q.reshape(1, -1), actual_k)
-            valid = lids[0][lids[0] >= 0]
-            candidate_ids.append(gids[valid])
+
+        if self._executor is not None and len(top_clusters) > 1:
+            # Parallel cluster search using persistent thread pool
+            futures = {
+                self._executor.submit(self._search_one_cluster, c, q, k): c
+                for c in top_clusters
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None and len(result):
+                    candidate_ids.append(result)
+        else:
+            # Single-threaded fallback
+            for c in top_clusters:
+                result = self._search_one_cluster(c, q, k)
+                if result is not None and len(result):
+                    candidate_ids.append(result)
 
         if not candidate_ids:
             return []
