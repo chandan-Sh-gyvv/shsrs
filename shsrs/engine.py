@@ -430,24 +430,23 @@ class SHSRSEngine:
         # compute scores once — reuse for both expansion gate and reranking
         cand_scores = self._data_norm[cands] @ q
 
-        # expand with cross-boundary links (score-gated, no double computation)
+        # expand with cross-boundary links — always expand top-k candidates
+        # k is scale-invariant: we always need exactly k true neighbours
+        # expanding top-k scorers gives the best candidates their boundary links
         if self._boundary_links and len(cands) > 0:
-            threshold = float(np.median(cand_scores))
-            extra_ids = []
-            for gid, sc in zip(cands, cand_scores):
-                if sc >= threshold:
-                    links = self._boundary_links.get(int(gid))
-                    if links is not None:
-                        extra_ids.append(links)
+            n_expand   = min(k, len(cands))
+            top_expand = np.argpartition(-cand_scores, n_expand)[:n_expand]
+            extra_ids  = []
+            for idx in top_expand:
+                links = self._boundary_links.get(int(cands[idx]))
+                if links is not None:
+                    extra_ids.append(links)
             if extra_ids:
-                new_cands  = np.unique(np.concatenate(extra_ids))
-                # only score the genuinely new candidates
-                existing   = set(cands.tolist())
-                new_only   = new_cands[~np.isin(new_cands,
-                                                 np.array(list(existing)))]
-                if len(new_only) > 0:
-                    new_scores = self._data_norm[new_only] @ q
-                    cands      = np.concatenate([cands, new_only])
+                new_cands = np.concatenate(extra_ids)
+                new_cands = new_cands[~np.isin(new_cands, cands)]
+                if len(new_cands) > 0:
+                    new_scores  = self._data_norm[new_cands] @ q
+                    cands       = np.concatenate([cands, new_cands])
                     cand_scores = np.concatenate([cand_scores, new_scores])
 
         # rerank by exact cosine (scores already computed above)
