@@ -90,6 +90,7 @@ class SHSRSEngine:
         self._n_clusters:  int                        = _DEFAULT_N_CLUSTERS
         self._dim:         int                        = 0
         self._n_vectors:   int                        = 0
+        self._pq_m:        int                        = 0
         self._n_threads:   int                        = os.cpu_count() or 4
         self._executor:    Optional[ThreadPoolExecutor] = None
 
@@ -109,6 +110,7 @@ class SHSRSEngine:
         igar_sample: int = _DEFAULT_IGAR_SAMPLE,
         knn_k: int       = _DEFAULT_KNN_K,
         gap_policy: Optional[list] = None,
+        pq_m: int = 0,
     ) -> "SHSRSEngine":
         """
         Build the index from raw vectors and save to disk.
@@ -132,6 +134,7 @@ class SHSRSEngine:
         engine = cls()
         engine._n_clusters = n_clusters
         engine._gap_policy = gap_policy or _DEFAULT_GAP_POLICY
+        engine._pq_m       = pq_m
 
         N, D = vectors.shape
         engine._dim      = D
@@ -172,7 +175,9 @@ class SHSRSEngine:
         engine._centers = centers
 
         # 5. Per-cluster HNSW indexes
-        logger.info(f"Building {n_clusters} local HNSW indexes (M={M})...")
+        use_pq = pq_m > 0
+        index_type = f"HNSW+PQ(m={pq_m})" if use_pq else "HNSWFlat"
+        logger.info(f"Building {n_clusters} local {index_type} indexes (M={M})...")
         t0 = time.time()
         for c in range(n_clusters):
             mask = (labels == c)
@@ -181,9 +186,18 @@ class SHSRSEngine:
             if len(gids) == 0:
                 continue
 
-            idx = faiss.IndexHNSWFlat(D, M, faiss.METRIC_INNER_PRODUCT)
-            idx.hnsw.efConstruction = ef_construction
-            idx.add(vecs)
+            if use_pq and len(gids) >= 256:
+                # IndexHNSWPQ: HNSW graph navigation + PQ compressed storage
+                # pq_m subquantisers, 8 bits each → D*4 / pq_m compression ratio
+                idx = faiss.IndexHNSWPQ(D, M, pq_m, 8)
+                idx.hnsw.efConstruction = ef_construction
+                idx.train(vecs)   # PQ codebook training
+                idx.add(vecs)
+            else:
+                # Fall back to flat for small clusters or pq_m=0
+                idx = faiss.IndexHNSWFlat(D, M, faiss.METRIC_INNER_PRODUCT)
+                idx.hnsw.efConstruction = ef_construction
+                idx.add(vecs)
 
             engine._indexes[c] = idx
             engine._id_maps[c] = gids
@@ -219,6 +233,7 @@ class SHSRSEngine:
             "ef_search":       self._ef_search,
             "gap_policy":      self._gap_policy,
             "n_indexes":       len(self._indexes),
+            "pq_m":            self._pq_m,
         }
         with open(index_dir / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -239,6 +254,7 @@ class SHSRSEngine:
         engine._n_vectors   = meta["n_vectors"]
         engine._ef_search   = meta["ef_search"]
         engine._gap_policy  = [tuple(p) for p in meta["gap_policy"]]
+        engine._pq_m        = meta.get("pq_m", 0)
 
         logger.info(f"Loading SHSRS index from {index_dir} "
                     f"({engine._n_vectors:,} vectors, "
@@ -505,21 +521,30 @@ def _build_knn_graph_faiss(data: np.ndarray, k: int) -> np.ndarray:
 
 def _run_igar(labels: np.ndarray, knn_graph: np.ndarray,
               n_clusters: int, n_iters: int, sample_size: int) -> np.ndarray:
-    labels = labels.copy()
-    N      = len(labels)
+    """
+    IGAR — Iterative Graph-Aligned Reassignment.
+
+    For each sampled vector, reassigns it to the plurality cluster
+    among its kNN neighbours. Uses numpy bincount internally which
+    is C-compiled and already optimal — vectorised approaches are
+    slower due to large intermediate array memory costs.
+    """
+    labels = labels.astype(np.int32).copy()
+    N, k   = knn_graph.shape
 
     def retention():
-        return (labels[knn_graph] == labels[:, None]).sum() / (N * knn_graph.shape[1])
+        return (labels[knn_graph] == labels[:, None]).sum() / (N * k)
 
     logger.info(f"IGAR iter 0: retention={retention():.4f}")
+
     for it in range(1, n_iters + 1):
         idx        = np.random.choice(N, size=min(sample_size, N), replace=False)
-        new_labels = labels.copy()
-        for i in idx:
-            nbrs = knn_graph[i]
-            if len(nbrs):
-                new_labels[i] = np.bincount(labels[nbrs], minlength=n_clusters).argmax()
-        labels = new_labels
+        # Pre-gather all neighbour labels in one numpy op (fast)
+        nbr_labels = labels[knn_graph[idx]]   # [S, k]
+        # bincount per row — C-compiled, already optimal
+        for j, i in enumerate(idx):
+            labels[i] = np.bincount(
+                nbr_labels[j], minlength=n_clusters).argmax()
         if it % 10 == 0:
             logger.info(f"IGAR iter {it}: retention={retention():.4f}")
 
