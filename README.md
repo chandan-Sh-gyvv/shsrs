@@ -24,6 +24,7 @@ SHSRS solves this by:
 - Refining cluster boundaries using **kNN graph alignment (IGAR)**
 - Localising HNSW search to small per-cluster graphs
 - Using **adaptive probe routing** to control compute per query
+- **Batched FAISS search** — groups queries by cluster for ~2.5x throughput gain
 
 Search cost becomes **probe-bounded**, not dataset-bounded.
 
@@ -49,15 +50,25 @@ Build-time pipeline:
 | probe=20 | 97.3% | 2.76ms | 362 |
 | adaptive | 95.7% | 2.20ms | 454 |
 
-### 1M SIFT (128D) — with cross-boundary links
+### 1M SIFT (128D) — single-query latency
 | Config | Recall@10 | Latency | QPS |
 |---|---|---|---|
-| probe=6  | 93.5% | 0.48ms | 2063 |
-| probe=8  | 96.3% | 0.61ms | 1640 |
-| probe=16 | 99.1% | 1.09ms | 918  |
-| probe=32 | 99.9% | 1.97ms | 509  |
+| probe=6  | 93.5% | 0.56ms | 1,794 |
+| probe=8  | 96.0% | 0.71ms | 1,400 |
+| probe=16 | 99.1% | 1.19ms | 838  |
+| probe=32 | 99.9% | 2.18ms | 460  |
+| adaptive | 99.4% | 1.56ms | 640  |
 
-vs flat IVF baseline: +19.0pp recall, 6.4x lower latency
+### 1M SIFT (128D) — full batch throughput (`search_batch`)
+| Config | Recall@10 | Avg Latency | QPS |
+|---|---|---|---|
+| probe=6  | 93.5% | 0.22ms | 4,476 |
+| probe=8  | 96.0% | 0.26ms | 3,828 |
+| probe=16 | 99.1% | 0.40ms | 2,506 |
+| probe=32 | 99.9% | 0.66ms | 1,512 |
+| adaptive | 99.4% | 0.50ms | 2,013 |
+
+vs flat IVF baseline: +19.0pp recall, 6.4x lower latency  
 vs brute force: 261x speedup at 97.3% recall (150K)
 
 ## Scaling Behaviour
@@ -65,16 +76,19 @@ vs brute force: 261x speedup at 97.3% recall (150K)
 At 1M vectors (SIFT1M):
 
 - Candidate coverage: ~0.001%
-- 99.9% Recall@10 @ 1.97ms (CPU)
+- 99.9% Recall@10 @ 2.18ms single-query / 0.66ms batch
+- Batch throughput: 1,512 QPS @ 99.9% recall, 4,476 QPS @ 93.5% recall
 - Index RAM: 610 MB
 - Build time: ~55 min CPU / ~2 min GPU
-- Search latency scales with **probe count**, not dataset size.
+- Search latency scales with **probe count**, not dataset size
+
 ---
 ## Paper
 📄 **[SHSRS_paper.pdf](SHSRS_paper.pdf)**
 
 > SHSRS: Semantic Hierarchical Search with Refined Subspace  
 > Chandan S H, Karnataka Bengaluru — Preprint, 22 February 2026
+
 ---
 
 ## Installation
@@ -125,8 +139,12 @@ results = engine.search(query_vector, k=10)
 # Fixed probe — deterministic latency
 results = engine.search(query_vector, k=10, probe=12)
 
-# Batch search
+# Batch search — 2.5x faster throughput via batched FAISS calls
 results = engine.search_batch(query_matrix, k=10)
+# → [[(global_id, cosine_score), ...], ...]
+
+# Batch search with fixed probe
+results = engine.search_batch(query_matrix, k=10, probe=16)
 ```
 
 ### Migrating from the experiment cache
@@ -146,8 +164,8 @@ python migrate.py
 |---|---|---|---|---|
 | ≤500K vectors, RAM-tight | 100 | 8 | adaptive | ~95% |
 | ≤500K vectors, high recall | 100 | 16 | 20 | ~97% |
-| ~1M vectors, balanced | 1000 | 16 | adaptive | ~93% |
-| ~1M vectors, high recall | 1000 | 16 | 32 | ~97% |
+| ~1M vectors, balanced | 1000 | 16 | adaptive | ~99% |
+| ~1M vectors, high recall | 1000 | 16 | 32 | ~99.9% |
 
 **Adaptive probe** (default) uses the centroid score gap to assign fewer probes to easy queries and more to boundary queries. Recalibrate when switching datasets:
 
@@ -177,8 +195,11 @@ python benchmark.py --probe 12
 python download_sift1m.py
 
 # Build index and benchmark (first run ~55 min, subsequent runs use cache)
-python benchmark_sift1m.py --quick
+python benchmark_sift1m.py --benchmark_only
 ```
+
+The benchmark reports both single-query latency (accurate p95/p99 percentiles)
+and full batch throughput (real-world QPS via `search_batch`).
 
 ---
 
@@ -222,6 +243,12 @@ On synthetic data: +0.01pp — IGAR's value is data-geometry dependent.
 large gap = query deep inside one cluster = few probes needed;
 small gap = boundary query = more probes needed.
 
+**5. Batched search** — `search_batch` groups all queries by their probed clusters
+and issues one FAISS call per cluster (rather than one per query-cluster pair),
+reducing FAISS overhead from Q×probe calls to n_clusters calls. At probe=16
+on SIFT1M this yields 2,506 QPS vs ~985 QPS sequential — a 2.5x improvement
+with identical recall.
+
 ---
 
 ## Requirements
@@ -241,6 +268,7 @@ GPU support: swap `faiss-cpu` for `faiss-gpu` — no code changes required.
 - Retrieval-augmented generation (RAG)
 - Semantic content search
 - Cost-sensitive vector search infrastructure
+- High-throughput batch embedding retrieval
 
 ---
 
