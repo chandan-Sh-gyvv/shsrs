@@ -38,24 +38,27 @@ Build-time pipeline:
 3. Per-cluster HNSW index construction
 4. Gap calibration for adaptive routing
 
+
 ## Results
 
-### With Cross-Boundary Links (latest)
+### 150K Wikipedia (384D) — with cross-boundary links
+| Config | Recall@10 | Latency | QPS |
+|---|---|---|---|
+| probe=6  | 91.0% | 1.03ms | 975 |
+| probe=12 | 95.1% | 1.75ms | 573 |
+| probe=20 | 97.3% | 2.76ms | 362 |
+| adaptive | 95.7% | 2.20ms | 454 |
 
-| Dataset | Vectors | Recall@10 | Latency | QPS | Index RAM |
-|---|---|---|---|---|---|
-| Wikipedia (384D) | 150K | 95.7% | 1.20ms | 831 | 238 MB |
+### 1M SIFT (128D) — with cross-boundary links
+| Config | Recall@10 | Latency | QPS |
+|---|---|---|---|
+| probe=6  | 93.6% | 0.85ms | 1180 |
+| probe=8  | 96.3% | 0.96ms | 1042 |
+| probe=16 | 97.8% | 1.34ms | 744  |
+| probe=32 | 99.1% | 2.29ms | 436  |
 
-### Baseline Architecture (no boundary links)
-
-| Dataset | Vectors | Recall@10 | Latency | QPS | Index RAM |
-|---|---|---|---|---|---|
-| Wikipedia (384D) | 150K | 95.4% | 1.91ms | 525 | 238 MB |
-| SIFT1M (128D) | 1M | 93.4% | 1.88ms | 533 | 610 MB |
-
-**vs flat IVF baseline:** +19.0pp recall, 2.7x lower latency, 9x fewer candidates simultaneously.  
-**vs brute force:** 261x speedup at 98.7% recall (150K).  
-**Cross-boundary links gain:** probe=6 achieves 95.7% recall (+7.6pp) at same latency as before.
+vs flat IVF baseline: +19.0pp recall, 6.4x lower latency
+vs brute force: 261x speedup at 97.3% recall (150K)
 
 ## Scaling Behaviour
 
