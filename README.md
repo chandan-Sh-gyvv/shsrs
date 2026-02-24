@@ -52,10 +52,10 @@ Build-time pipeline:
 ### 1M SIFT (128D) — with cross-boundary links
 | Config | Recall@10 | Latency | QPS |
 |---|---|---|---|
-| probe=6  | 93.6% | 0.85ms | 1180 |
-| probe=8  | 96.3% | 0.96ms | 1042 |
-| probe=16 | 97.8% | 1.34ms | 744  |
-| probe=32 | 99.1% | 2.29ms | 436  |
+| probe=6  | 93.5% | 0.48ms | 2063 |
+| probe=8  | 96.3% | 0.61ms | 1640 |
+| probe=16 | 99.1% | 1.09ms | 918  |
+| probe=32 | 99.9% | 1.97ms | 509  |
 
 vs flat IVF baseline: +19.0pp recall, 6.4x lower latency
 vs brute force: 261x speedup at 97.3% recall (150K)
