@@ -65,7 +65,7 @@ vs brute force: 261x speedup at 97.3% recall (150K)
 At 1M vectors (SIFT1M):
 
 - Candidate coverage: ~0.001%
-- 97.8% Recall@10 @ 3.79ms (CPU)
+- 99.9% Recall@10 @ 1.97ms (CPU)
 - Index RAM: 610 MB
 - Build time: ~55 min CPU / ~2 min GPU
 - Search latency scales with **probe count**, not dataset size.
