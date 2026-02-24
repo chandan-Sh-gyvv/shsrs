@@ -433,7 +433,7 @@ class SHSRSEngine:
         # expand with cross-boundary links — always expand top-k candidates
         # k is scale-invariant: we always need exactly k true neighbours
         # expanding top-k scorers gives the best candidates their boundary links
-        if self._boundary_links and len(cands) > 0:
+        if self._boundary_links and len(cands) > 0 and self._n_vectors <= 200_000:
             n_expand   = min(k, len(cands))
             top_expand = np.argpartition(-cand_scores, n_expand)[:n_expand]
             extra_ids  = []
